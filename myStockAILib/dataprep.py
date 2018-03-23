@@ -8,6 +8,19 @@ Created on Wed Nov 22 16:21:36 2017
 import pandas as pd
 import tushare as ts
 import stockbasic as sb
+from matplotlib.pylab import date2num
+import datetime
+
+import numpy as np
+import tushare as ts
+import seaborn as sns
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.finance as mpf
+
+# Matplotlib 显示中文
+mpl.rcParams['font.sans-serif'] = ['SimHei']  #指定默认字体
+mpl.rcParams['axes.unicode_minus'] = False  #解决保存图像是负号'-'显示为方块的问题
 
 #
 # printProgressBar
@@ -80,6 +93,10 @@ def fetch_raw_data(stock_list, start_date, end_date):
         
         # fetch K data of each code
         onestock = ts.get_k_data(row['code'], start=start_date, end=end_date)
+        
+        # convert 'date' to matplotlib number
+        onestock['mpl.date'] = date_to_num(onestock['date'].values)
+    
         # set index to 'date'
         onestock.set_index('date', inplace=True)
         # print('this is '+row['code'])
@@ -94,14 +111,15 @@ def fetch_raw_data(stock_list, start_date, end_date):
     return all_data
 
 
-
+def test_sync():
+    print('exits 2.0')
 
 #
 # generate_samples
 #
 
 # number of bars to look back to form a sample
-CONST_LOOKBACK_SAMPLES = 60
+CONST_LOOKBACK_SAMPLES = 120
 
 def generate_samples(stock_data):
     ''' Function to generate samples. 选出符合规则的数据做训练用例.
@@ -127,20 +145,41 @@ def generate_samples(stock_data):
     # Initialize X_all and Y_all
     X_all = pd.DataFrame()
     Y_all = pd.DataFrame()
+    X_frames = []
+    Y_frames = []
+    
+    # debug
+    nb_samples = 0
+    verbose = False
+    verbose_l1 = False
 
     for index, row in stock_data.iterrows():
+        # debug
+        # if (row['mpl.date'] >= 735218.0) and (row['mpl.date'] <= 735277.0):
+        #     verbose = True
+        # else:
+        #     verbose = False
+        
         # is this row a buy-point?
         if not sb.is_squeeze_buy_point(stock_data, index):
-            ## print(index + ' is NOT')
+            if verbose:
+                print(index, ' is NOT squeeze buypoint')
             # check next row
             continue
 
         # Yes, it is a buy-point.
+        if verbose:
+            print(index, ' is squeeze buypoint')
+    
         # Let's check when is the sell-point.
         sell_index, sell_reason = sb.get_sell_point(stock_data, index)
 
+        if verbose:
+            print('sellpoint: ', sell_index, ' reason: ', sell_reason)
+
         # Do we hit a sell point?
         if sell_reason == 0: # No, skip it
+            print('No sell_point for. Skip ', index)
             continue
 
         ## print('=======')
@@ -156,6 +195,7 @@ def generate_samples(stock_data):
         first_location = location_of_buy_point - CONST_LOOKBACK_SAMPLES + 1
         if first_location < 0: # there is no enough records to form a valid sample
             # skip it
+            print('First location < 0, Skip ', index)
             continue
 
         # Slicing. These are totally CONST_LOOKBACK_SAMPLES of records.
@@ -163,6 +203,7 @@ def generate_samples(stock_data):
         # x_sample Validity check.
         if x_sample.isnull().values.any():
             # skip it
+            print('Null values in x_sample. Skip. ', index)
             continue
 
         # create y_sample as a pandas.Series
@@ -176,13 +217,159 @@ def generate_samples(stock_data):
         # y_sample validity check
         if y_sample.isnull().values.any():
             # skip it
+            print('Null value in y_smaple. skip. ', index, sell_index)
             continue
 
-        # Add N-record to X_all
-        X_all = X_all.append(x_sample, ignore_index = False)
-        # Add sell-point information to Y_all.
-        Y_all = Y_all.append(y_sample, ignore_index = True)
+        if verbose:
+            print('append x_sample, y_smaple to X/Y_frames')
+            print('y_sample: ', y_sample)
+            
+        if verbose_l1:
+            print(nb_samples, ' y_sample: ', index, sell_index)
+        
+        # Add into X/Y_frames
+        X_frames.append(x_sample)
+        Y_frames.append(y_sample)
+        nb_samples += 1
 
-        #### END of for loop ####
+    #### END of for loop ####
 
+    # Add N-record to X_all
+    X_all = pd.concat(X_frames, ignore_index = False)
+    # Add sell-point information to Y_all.
+    Y_all = pd.concat(Y_frames, axis = 1)
+    Y_all = Y_all.T
+    
+    if verbose_l1:
+        print('number of samples for ', index, ': ', nb_samples)
+        print('shape of X/Y:', X_all.shape, Y_all.shape)
+    
     return X_all, Y_all
+
+
+#
+# date_to_num
+#
+
+
+def date_to_num(dates):
+    ''' Function to convert tushare 'date' string to matplotlib datenum
+    
+    Input
+    =====
+    dates: ndarray of tushare 'date' strings. Eg. ['2013-01-31', ...]
+    
+    Output
+    ======
+    Return: list of float datetime value compatible to matplotlib: floating point 
+            numbers which represent time in days since 0001-01-01 UTC, plus 1. 
+            For example, 0001-01-01, 06:00 is 1.25, not 0.25.
+    
+    Example
+    =======
+        stock_data['mpl.date'] = date_to_num(stock_data['date'].values)
+
+    '''
+    num_time = []
+    for date in dates:
+        date_time = datetime.datetime.strptime(date,'%Y-%m-%d')
+        num_date = date2num(date_time)
+        '''
+            matplotlib.dates.date2num(d)
+                Converts datetime objects to Matplotlib dates
+        '''
+        num_time.append(num_date)
+    return num_time
+
+
+#
+# plog_stock_data
+#
+
+
+def plot_stock_data(stock_data, title_postfix=''):
+    ''' Function to plot stock_data
+    
+    Input
+    =====
+    stock_data: DataFrame, with columns 'date', 'code', 'close', 'volumn', etc.
+    
+    Output
+    ======
+    Return: None
+    '''
+   
+    # make a local copy
+    sdata = stock_data.copy(deep=False)
+    # convert index 'date' to a column
+    sdata.reset_index(level=1, inplace=True)
+    
+    # convert date to num
+    sdata['mpl.date'] = date_to_num(sdata['date'].values)
+
+    fig, axes = plt.subplots(7, sharex=True, figsize=(15,14),
+                             gridspec_kw={'height_ratios':[3,1,1,1,1,1,1]})
+    
+    # axes[0]: k-line
+    mpf.candlestick_ochl(axes[0],
+                         sdata[['mpl.date', 'open', 'close', 'high', 'low']].values,
+                         width=1.0,
+                         colorup = 'g',
+                         colordown = 'r')
+    # axes[0]: EMA8, EMA21
+    axes[0].plot(sdata['mpl.date'].values, sdata['EMA8'].values, 'm', label='EMA8')
+    axes[0].plot(sdata['mpl.date'].values, sdata['EMA21'].values, 'c', label='EMA21')
+    axes[0].legend(loc=0)
+    axes[0].grid(True)
+    
+    axes[0].set_title(stock_data['code'].iloc[0] + ' ' + title_postfix)
+    axes[0].set_ylabel('Price')
+    axes[0].grid(True)
+    axes[0].xaxis_date()
+
+    # axes[1]: volume
+    axes[1].bar(sdata['mpl.date'].values-0.25, sdata['volume'].values, width= 0.5)
+    axes[1].set_ylabel('Volume')
+    axes[1].grid(True)
+    
+    # axes[2]: MTMMA
+    bars = axes[2].bar(sdata['mpl.date'].values-0.25, sdata['MTMMA'].values, width=0.8)
+    for bar in bars:
+        if bar.get_height() > 0:
+            bar.set_color('g')
+        else:
+            bar.set_color('r')
+        
+    # axes[2]: SQUEEZE
+    axes[2].plot(sdata['mpl.date'].values-0.25,
+                 [0 if x == sb.CONST_SQUEEZE_ONGOING else float('nan') for x in sdata['SQUEEZE'].values], # rescale
+                 'ko',
+                 label='SQUEEZE')
+    axes[2].set_ylabel('SQZ')
+    axes[2].grid(True)
+    
+    # axes[3]: TTM WAVE C
+    bars = axes[3].bar(sdata['mpl.date'].values-0.25, sdata['MACD6'].values, color='red', width=0.8, alpha=0.8)
+    bars = axes[3].bar(sdata['mpl.date'].values-0.25, sdata['HIST5'].values, color='orange', width=0.8, alpha=0.8)
+    axes[3].set_ylabel('WAVE C')
+    axes[3].grid(True)
+   
+    # axes[4]: TTM WAVE B
+    bars = axes[4].bar(sdata['mpl.date'].values-0.25, sdata['HIST4'].values, color='magenta', width=0.8, alpha=0.8)
+    bars = axes[4].bar(sdata['mpl.date'].values-0.25, sdata['HIST3'].values, color='teal', width=0.8, alpha=0.8)
+    axes[4].set_ylabel('WAVE B')
+    axes[4].grid(True)
+   
+    # axes[5]: TTM WAVE A
+    bars = axes[5].bar(sdata['mpl.date'].values-0.25, sdata['HIST2'].values, color='lawngreen', width=0.8, alpha=0.8)
+    bars = axes[5].bar(sdata['mpl.date'].values-0.25, sdata['HIST1'].values, color='yellow', width=0.8, alpha=0.8)
+    axes[5].set_ylabel('WAVE A')
+    axes[5].grid(True)
+    
+    # axes[6]: ADX
+    axes[6].plot(sdata['mpl.date'].values, sdata['ADX'].values, 'm', label='ADX')
+    axes[6].set_ylabel('ADX')
+    axes[6].grid(True)
+   
+    return
+    

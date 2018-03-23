@@ -2,6 +2,7 @@
 
 import talib
 import pandas as pd
+import numpy as np
 
 
 def ttm_propulsion(stock_data):
@@ -311,13 +312,27 @@ def is_squeeze_buy_point(stock_data, index):
     '''
     ret = False
     
+    #debug
+    verbose = False
+
     # test TTM Wave C > 0
-    if (stock_data.loc[index, 'HIST5'] <= 0) or (stock_data.loc[index, 'MACD6'] <= 0):
+    if (np.isnan(stock_data.loc[index, 'HIST5']) or  # Handle NaN
+        np.isnan(stock_data.loc[index, 'MACD6']) or
+        (stock_data.loc[index, 'HIST5'] <= 0) or
+        (stock_data.loc[index, 'MACD6'] <= 0)):
+        
+        if verbose:
+            print(stock_data.loc[index, 'HIST5'], stock_data.loc[index, 'MACD6'])
+            print(index, 'HIST5 or MACD6 <= 0, return False')
+            
         ret = False
         return ret
     
     # test whether 'SQUEEZE' is on-going
     if (stock_data.loc[index, 'SQUEEZE'] == CONST_SQUEEZE_ONGOING):
+
+        if verbose:
+            print(index, ' Squeeze is on-going. return True')
         ret = True
         return ret
     
@@ -325,9 +340,15 @@ def is_squeeze_buy_point(stock_data, index):
     if (stock_data.loc[index, 'SQUEEZE'] == CONST_SQUEEZE_RELEASED):
         # check previous bar is 'SQUEEZE' ongoing?
         if (stock_data['SQUEEZE'].shift(1)[index] == CONST_SQUEEZE_ONGOING):
+            
+            if verbose:
+                print(index, ' squeeze is released. But yesterday it is ongoing. return True')
             ret = True
             return ret
     
+    if verbose:
+        print(index, ' nothing hit. return False')
+
     return ret
 
 
@@ -385,7 +406,8 @@ def get_sell_point(stock_data, buy_index, multi_atr = 2., n_low = 10):
     #print('buy_price: ', buy_price)
     #print('stop_price: ', stop_price)
     
-    remaining_stock_data = stock_data[buy_index:]
+    buy_index_iloc = stock_data.index.get_loc(buy_index)
+    remaining_stock_data = stock_data.iloc[(buy_index_iloc + 1):]
     n_low_col_name = 'LOW' + str(n_low)
             
     # check when to sell
